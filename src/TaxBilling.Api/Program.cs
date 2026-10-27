@@ -1,8 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 // 1. Set up the app and register services
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHealthChecks();
+builder.Services.AddDbContext<TaxBillingDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("TaxBillingDb")));
 
 var app = builder.Build();
 
@@ -31,8 +34,8 @@ app.MapPost("/payments", (PaymentRequest req,
     if (string.IsNullOrWhiteSpace(idempotencyKey))
         return Results.BadRequest(new { error = "Idempotency-Key header is required" });
 
-    if (processedKeys.TryGetValue(idempotencyKey, out var existing))   // NEW (B2.3)
-        return Results.Ok(existing);                                    // NEW (B2.3)
+    if (processedKeys.TryGetValue(idempotencyKey, out var existing))
+        return Results.Ok(existing);
 
     var bill = bills.FirstOrDefault(b => b.ParcelId == req.ParcelId);
     if (bill is null)
@@ -41,9 +44,9 @@ app.MapPost("/payments", (PaymentRequest req,
     if (req.Amount <= 0)
         return Results.BadRequest(new { error = "Amount must be greater than 0" });
 
-    var payment = new Payment(Guid.NewGuid(), req.ParcelId, req.Amount, DateTime.UtcNow);
+    var payment = new Payment(Guid.NewGuid(), req.ParcelId, req.Amount, DateTime.UtcNow, idempotencyKey);
     payments.Add(payment);
-    processedKeys[idempotencyKey] = payment;                            // NEW (B2.3)
+    processedKeys[idempotencyKey] = payment;
 
     return Results.Created($"/payments/{payment.Id}", payment);
 });
@@ -55,7 +58,7 @@ app.MapHealthChecks("/health");
 // 4. Start the web server
 app.Run();
 
-// The shape of a tax bill
+// Data shapes
 record TaxBill(string ParcelId, string Address, int TaxYear, decimal AmountDue, string Status);
 record PaymentRequest(string ParcelId, decimal Amount);
-record Payment(Guid Id, string ParcelId, decimal Amount, DateTime PaidAt);
+record Payment(Guid Id, string ParcelId, decimal Amount, DateTime PaidAt, string IdempotencyKey);
