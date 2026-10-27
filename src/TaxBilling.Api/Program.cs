@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 // 1. Set up the app and register services
 var builder = WebApplication.CreateBuilder(args);
@@ -9,35 +10,29 @@ builder.Services.AddDbContext<TaxBillingDbContext>(options =>
 
 var app = builder.Build();
 
-// 2. Sample data (in memory for now; a real database comes later)
-var bills = new List<TaxBill>
+// 2. Endpoints (data now lives in PostgreSQL)
+app.MapGet("/bills", async (TaxBillingDbContext db) =>
+    await db.Bills.ToListAsync());
+
+app.MapGet("/bills/{parcelId}", async (string parcelId, TaxBillingDbContext db) =>
 {
-    new("R-1001", "123 Main St", 2026, 2450.00m, "Unpaid"),
-    new("R-1002", "88 Oak Ave",  2026, 1875.50m, "Paid"),
-};
-
-var payments = new List<Payment>();
-var processedKeys = new Dictionary<string, Payment>();
-
-// 3. Endpoints
-app.MapGet("/bills", () => bills);
-
-app.MapGet("/bills/{parcelId}", (string parcelId) =>
-{
-    var bill = bills.FirstOrDefault(b => b.ParcelId == parcelId);
+    var bill = await db.Bills.FindAsync(parcelId);
     return bill is null ? Results.NotFound() : Results.Ok(bill);
 });
 
-app.MapPost("/payments", (PaymentRequest req,
-    [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey) =>
+app.MapPost("/payments", async (PaymentRequest req,
+    [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+    TaxBillingDbContext db) =>
 {
     if (string.IsNullOrWhiteSpace(idempotencyKey))
         return Results.BadRequest(new { error = "Idempotency-Key header is required" });
 
-    if (processedKeys.TryGetValue(idempotencyKey, out var existing))
+    // Seen this key before? Return the original payment.
+    var existing = await db.Payments.FirstOrDefaultAsync(p => p.IdempotencyKey == idempotencyKey);
+    if (existing is not null)
         return Results.Ok(existing);
 
-    var bill = bills.FirstOrDefault(b => b.ParcelId == req.ParcelId);
+    var bill = await db.Bills.FindAsync(req.ParcelId);
     if (bill is null)
         return Results.NotFound(new { error = $"No bill found for parcel {req.ParcelId}" });
 
@@ -45,17 +40,29 @@ app.MapPost("/payments", (PaymentRequest req,
         return Results.BadRequest(new { error = "Amount must be greater than 0" });
 
     var payment = new Payment(Guid.NewGuid(), req.ParcelId, req.Amount, DateTime.UtcNow, idempotencyKey);
-    payments.Add(payment);
-    processedKeys[idempotencyKey] = payment;
+    db.Payments.Add(payment);
+
+    try
+    {
+        await db.SaveChangesAsync();
+    }
+    catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+    {
+        // Two identical requests raced; the database let only one win. Return the winner.
+        db.ChangeTracker.Clear();
+        var winner = await db.Payments.FirstAsync(p => p.IdempotencyKey == idempotencyKey);
+        return Results.Ok(winner);
+    }
 
     return Results.Created($"/payments/{payment.Id}", payment);
 });
 
-app.MapGet("/payments", () => payments);
+app.MapGet("/payments", async (TaxBillingDbContext db) =>
+    await db.Payments.OrderBy(p => p.PaidAt).ToListAsync());
 
 app.MapHealthChecks("/health");
 
-// 4. Start the web server
+// 3. Start the web server
 app.Run();
 
 // Data shapes
