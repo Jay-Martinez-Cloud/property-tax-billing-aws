@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Mvc;
+
 // 1. Set up the app and register services
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHealthChecks();
@@ -12,6 +14,7 @@ var bills = new List<TaxBill>
 };
 
 var payments = new List<Payment>();
+var processedKeys = new Dictionary<string, Payment>();
 
 // 3. Endpoints
 app.MapGet("/bills", () => bills);
@@ -22,8 +25,15 @@ app.MapGet("/bills/{parcelId}", (string parcelId) =>
     return bill is null ? Results.NotFound() : Results.Ok(bill);
 });
 
-app.MapPost("/payments", (PaymentRequest req) =>
+app.MapPost("/payments", (PaymentRequest req,
+    [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey) =>
 {
+    if (string.IsNullOrWhiteSpace(idempotencyKey))
+        return Results.BadRequest(new { error = "Idempotency-Key header is required" });
+
+    if (processedKeys.TryGetValue(idempotencyKey, out var existing))   // NEW (B2.3)
+        return Results.Ok(existing);                                    // NEW (B2.3)
+
     var bill = bills.FirstOrDefault(b => b.ParcelId == req.ParcelId);
     if (bill is null)
         return Results.NotFound(new { error = $"No bill found for parcel {req.ParcelId}" });
@@ -33,6 +43,7 @@ app.MapPost("/payments", (PaymentRequest req) =>
 
     var payment = new Payment(Guid.NewGuid(), req.ParcelId, req.Amount, DateTime.UtcNow);
     payments.Add(payment);
+    processedKeys[idempotencyKey] = payment;                            // NEW (B2.3)
 
     return Results.Created($"/payments/{payment.Id}", payment);
 });
