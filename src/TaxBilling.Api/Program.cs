@@ -24,8 +24,10 @@ app.MapPost("/payments", async (PaymentRequest req,
     [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
     TaxBillingDbContext db) =>
 {
-    if (string.IsNullOrWhiteSpace(idempotencyKey))
-        return Results.BadRequest(new { error = "Idempotency-Key header is required" });
+    // Validate the request (rules live in PaymentValidator.cs so they can be unit tested)
+    var error = PaymentValidator.Validate(idempotencyKey, req.Amount);   // CHANGED (D2)
+    if (error is not null)                                               // CHANGED (D2)
+        return Results.BadRequest(new { error });                        // CHANGED (D2)
 
     // Seen this key before? Return the original payment.
     var existing = await db.Payments.FirstOrDefaultAsync(p => p.IdempotencyKey == idempotencyKey);
@@ -36,10 +38,9 @@ app.MapPost("/payments", async (PaymentRequest req,
     if (bill is null)
         return Results.NotFound(new { error = $"No bill found for parcel {req.ParcelId}" });
 
-    if (req.Amount <= 0)
-        return Results.BadRequest(new { error = "Amount must be greater than 0" });
+    // (the old "Amount <= 0" check was removed; PaymentValidator handles it now)
 
-    var payment = new Payment(Guid.NewGuid(), req.ParcelId, req.Amount, DateTime.UtcNow, idempotencyKey);
+    var payment = new Payment(Guid.NewGuid(), req.ParcelId, req.Amount, DateTime.UtcNow, idempotencyKey!);
     db.Payments.Add(payment);
 
     try
