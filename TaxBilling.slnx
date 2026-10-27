@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/TaxBilling.Api/TaxBilling.Api.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TaxBilling.Api.Tests/TaxBilling.Api.Tests.csproj" />
+  </Folder>
 </Solution>
