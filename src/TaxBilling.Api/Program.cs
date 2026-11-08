@@ -5,8 +5,18 @@ using Npgsql;
 // 1. Set up the app and register services
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHealthChecks();
+// Connection string comes from config; in AWS the password is injected separately from Secrets Manager
+var connectionString = builder.Configuration.GetConnectionString("TaxBillingDb");
+var dbPassword = builder.Configuration["DB_PASSWORD"];
+if (!string.IsNullOrEmpty(dbPassword))
+{
+    var csb = new NpgsqlConnectionStringBuilder(connectionString) { Password = dbPassword };
+    connectionString = csb.ConnectionString;
+}
+
 builder.Services.AddDbContext<TaxBillingDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("TaxBillingDb")));
+    options.UseNpgsql(connectionString));
+
 
 var app = builder.Build();
 
