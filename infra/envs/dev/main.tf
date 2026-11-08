@@ -14,7 +14,7 @@ module "network" {
   source = "../../modules/network"
 
   name               = "taxbilling-dev"
-  enable_nat_gateway = false # turn on in 2E when Fargate needs outbound access
+  enable_nat_gateway = true # turn on when Fargate needs outbound access
 }
 
 output "vpc_id" {
