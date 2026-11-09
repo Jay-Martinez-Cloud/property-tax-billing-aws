@@ -1,7 +1,7 @@
 variable "image_tag" {
   description = "Image tag (git SHA) to deploy"
   type        = string
-  default     = "1cdd9c3" # the image you pushed in 2E.1
+  default     = "04aa2eb"
 }
 
 # ---------- Logs ----------
@@ -128,3 +128,5 @@ resource "aws_ecs_service" "api" {
 
   depends_on = [aws_lb_listener.http]
 }
+
+
