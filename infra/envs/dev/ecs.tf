@@ -1,7 +1,7 @@
 variable "image_tag" {
   description = "Image tag (git SHA) to deploy"
   type        = string
-  default     = "04aa2eb"
+  default     = "04aa2eb" # will be replaced by the pipeline's git SHA in 3E
 }
 
 # ---------- Logs ----------
@@ -73,7 +73,7 @@ resource "aws_ecs_task_definition" "api" {
 
   container_definitions = jsonencode([{
     name      = "api"
-    image     = "${aws_ecr_repository.api.repository_url}:${var.image_tag}"
+    image     = "${data.aws_ecr_repository.api.repository_url}:${var.image_tag}" # repo is owned by infra/ci
     essential = true
 
     portMappings = [{ containerPort = 8080, protocol = "tcp" }]
@@ -128,5 +128,3 @@ resource "aws_ecs_service" "api" {
 
   depends_on = [aws_lb_listener.http]
 }
-
-
