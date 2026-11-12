@@ -1,0 +1,63 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    paths:
+      - "infra/**" # only run when a PR touches Terraform
+
+permissions:
+  contents: read
+  id-token: write # OIDC to AWS
+  pull-requests: write # post the plan as a PR comment
+
+jobs:
+  plan:
+    name: Plan (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [infra/ci, infra/envs/dev]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC, read-only CI role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform -chdir=${{ matrix.dir }} init -input=false
+
+      - name: Terraform plan
+        id: plan
+        run: |
+          set -o pipefail
+          terraform -chdir=${{ matrix.dir }} plan -input=false -no-color -lock-timeout=120s \
+            | tee plan.txt
+
+      - name: Comment plan on PR
+        if: always() && steps.plan.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### 📋 Terraform plan: \`${{ matrix.dir }}\` (${{ steps.plan.outcome }})"
+            echo
+            echo '```'
+            grep -E '^(Plan:|No changes|Error)' plan.txt || echo "(see full log)"
+            echo '```'
+            echo "<details><summary>Full plan</summary>"
+            echo
+            echo '```'
+            head -c 60000 plan.txt
+            echo '```'
+            echo "</details>"
+          } > comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
