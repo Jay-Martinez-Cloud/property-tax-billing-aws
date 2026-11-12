@@ -1,7 +1,7 @@
-variable "github_repo" {
-  description = "owner/repo allowed to assume these roles"
+variable "github_subject_prefix" {
+  description = "GitHub OIDC subject prefix (immutable format: owner@owner_id/repo@repo_id)"
   type        = string
-  default     = "Jay-Martinez-Cloud/property-tax-billing-aws"
+  default     = "repo:Jay-Martinez-Cloud@167151410/property-tax-billing-aws@1450648081"
 }
 
 data "aws_caller_identity" "current" {}
@@ -34,9 +34,10 @@ data "aws_iam_policy_document" "ci_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
+
       values = [
-        "repo:${var.github_repo}:ref:refs/heads/main",
-        "repo:${var.github_repo}:pull_request",
+        "${var.github_subject_prefix}:ref:refs/heads/main",
+        "${var.github_subject_prefix}:pull_request",
       ]
     }
   }
@@ -102,7 +103,7 @@ data "aws_iam_policy_document" "deploy_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:environment:production"]
+      values   = ["${var.github_subject_prefix}:environment:production"]
     }
   }
 }
