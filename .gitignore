@@ -491,3 +491,9 @@ crash.log
 __pycache__/
 *.pyc
 infra/batch/build/
+
+# Terraform variable files (may contain personal or environment-specific values)
+*.tfvars
+
+# Terraform variable files (may contain personal or environment-specific values)
+*.tfvars
