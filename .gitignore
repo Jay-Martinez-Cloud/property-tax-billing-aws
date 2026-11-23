@@ -487,3 +487,7 @@ $RECYCLE.BIN/
 *.tfstate
 *.tfstate.*
 crash.log
+# Python / Lambda build artifacts
+__pycache__/
+*.pyc
+infra/batch/build/
