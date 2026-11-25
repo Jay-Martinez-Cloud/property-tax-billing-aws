@@ -1,6 +1,7 @@
 variable "alert_email" {
-  description = "Where DLQ alerts are sent (set in terraform.tfvars, which is gitignored)"
+  description = "Where DLQ alerts are sent (terraform.tfvars locally, TF_VAR_alert_email in CI)"
   type        = string
+  sensitive   = true # redacted in plan/apply output, so it never lands in a PR comment
 }
 
 resource "aws_sns_topic" "alerts" {

@@ -14,10 +14,12 @@ jobs:
   plan:
     name: Plan (${{ matrix.dir }})
     runs-on: ubuntu-latest
+    env:
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }} # NEW: only infra/batch uses it; other roots ignore it
     strategy:
       fail-fast: false
       matrix:
-        dir: [infra/ci, infra/envs/dev]
+        dir: [infra/ci, infra/envs/dev, infra/batch] # NEW: added infra/batch
     steps:
       - uses: actions/checkout@v4
 

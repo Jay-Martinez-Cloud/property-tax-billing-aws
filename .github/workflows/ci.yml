@@ -43,7 +43,7 @@ jobs:
 
       - name: Validate (no backend, no AWS credentials needed)
         run: |
-          for dir in infra/modules/network infra/envs/dev infra/ci infra/bootstrap; do
+          for dir in infra/modules/network infra/envs/dev infra/ci infra/bootstrap infra/batch; do
             echo "== $dir"
             terraform -chdir=$dir init -backend=false -input=false
             terraform -chdir=$dir validate
