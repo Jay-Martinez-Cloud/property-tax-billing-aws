@@ -1,7 +1,23 @@
 variable "image_tag" {
   description = "Image tag (git SHA) to deploy"
   type        = string
-  default     = "04aa2eb" # will be replaced by the pipeline's git SHA in 3E
+  default     = "1bab5c7" # the trimmed image with the Datadog tracer (5A.3); the pipeline overrides this
+}
+
+variable "datadog_site" {
+  description = "Datadog site for your account (e.g. datadoghq.com for US1). Confirm at signup."
+  type        = string
+  default     = "datadoghq.com"
+}
+
+# The Datadog API key secret is owned by infra/ci; dev only reads it
+data "aws_secretsmanager_secret" "datadog_api_key" {
+  name = "taxbilling/datadog-api-key"
+}
+
+locals {
+  dd_service = "taxbilling-api"
+  dd_env     = "dev"
 }
 
 # ---------- Logs ----------
@@ -26,7 +42,7 @@ data "aws_iam_policy_document" "ecs_tasks_assume" {
   }
 }
 
-# Execution role: used by ECS itself to pull the image, write logs and read the secret
+# Execution role: used by ECS itself to pull images, write logs and read secrets
 resource "aws_iam_role" "task_execution" {
   name               = "taxbilling-dev-task-execution"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
@@ -43,9 +59,12 @@ resource "aws_iam_role_policy" "task_execution_db_secret" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [aws_db_instance.this.master_user_secret[0].secret_arn] # this ONE secret only
+      Effect = "Allow"
+      Action = ["secretsmanager:GetSecretValue"]
+      Resource = [
+        aws_db_instance.this.master_user_secret[0].secret_arn, # DB password
+        data.aws_secretsmanager_secret.datadog_api_key.arn,    # Datadog API key
+      ]
     }]
   })
 }
@@ -56,47 +75,97 @@ resource "aws_iam_role" "task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
 }
 
-# ---------- Task definition (the "recipe" for one container) ----------
+# ---------- Task definition: the API + a Datadog agent sidecar ----------
 resource "aws_ecs_task_definition" "api" {
   family                   = "taxbilling-dev-api"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "256" # 0.25 vCPU
-  memory                   = "512" # MiB
+  cpu                      = "512"  # 0.5 vCPU, shared by the app and the agent
+  memory                   = "1024" # MiB
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
-    cpu_architecture        = "ARM64" # Graviton, matches the image you built
+    cpu_architecture        = "ARM64" # Graviton
   }
 
-  container_definitions = jsonencode([{
-    name      = "api"
-    image     = "${data.aws_ecr_repository.api.repository_url}:${var.image_tag}" # repo is owned by infra/ci
-    essential = true
+  container_definitions = jsonencode([
+    {
+      name      = "api"
+      image     = "${data.aws_ecr_repository.api.repository_url}:${var.image_tag}"
+      essential = true
 
-    portMappings = [{ containerPort = 8080, protocol = "tcp" }]
+      portMappings = [{ containerPort = 8080, protocol = "tcp" }]
 
-    environment = [{
-      name  = "ConnectionStrings__TaxBillingDb"
-      value = "Host=${aws_db_instance.this.address};Port=5432;Database=taxbilling;Username=taxbilling_admin"
-    }]
+      environment = [
+        { name = "ConnectionStrings__TaxBillingDb", value = "Host=${aws_db_instance.this.address};Port=5432;Database=taxbilling;Username=taxbilling_admin" },
+        { name = "DD_SERVICE", value = local.dd_service },
+        { name = "DD_ENV", value = local.dd_env },
+        { name = "DD_VERSION", value = var.image_tag },
+        { name = "DD_LOGS_INJECTION", value = "true" },
+        { name = "DD_RUNTIME_METRICS_ENABLED", value = "true" },
+      ]
 
-    secrets = [{
-      name      = "DB_PASSWORD"
-      valueFrom = "${aws_db_instance.this.master_user_secret[0].secret_arn}:password::"
-    }]
+      secrets = [{
+        name      = "DB_PASSWORD"
+        valueFrom = "${aws_db_instance.this.master_user_secret[0].secret_arn}:password::"
+      }]
 
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        "awslogs-group"         = aws_cloudwatch_log_group.api.name
-        "awslogs-region"        = var.region
-        "awslogs-stream-prefix" = "api"
+      dockerLabels = {
+        "com.datadoghq.tags.service" = local.dd_service
+        "com.datadoghq.tags.env"     = local.dd_env
+        "com.datadoghq.tags.version" = var.image_tag
+      }
+
+      dependsOn = [{ containerName = "datadog-agent", condition = "START" }]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.api.name
+          "awslogs-region"        = var.region
+          "awslogs-stream-prefix" = "api"
+        }
+      }
+    },
+    {
+      name      = "datadog-agent"
+      image     = "public.ecr.aws/datadog/agent:7"
+      essential = false # if the agent fails, the app keeps serving traffic
+
+      portMappings = [{ containerPort = 8126, protocol = "tcp" }]
+
+      environment = [
+        { name = "ECS_FARGATE", value = "true" },
+        { name = "DD_SITE", value = var.datadog_site },
+        { name = "DD_APM_ENABLED", value = "true" },
+        { name = "DD_ENV", value = local.dd_env },
+      ]
+
+      secrets = [{
+        name      = "DD_API_KEY"
+        valueFrom = data.aws_secretsmanager_secret.datadog_api_key.arn
+      }]
+
+      healthCheck = {
+        command     = ["CMD-SHELL", "agent health"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 15
+      }
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.api.name
+          "awslogs-region"        = var.region
+          "awslogs-stream-prefix" = "datadog"
+        }
       }
     }
-  }])
+  ])
 }
 
 # ---------- Service (keeps N copies running behind the ALB) ----------
