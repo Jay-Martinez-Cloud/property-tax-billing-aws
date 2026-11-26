@@ -10,6 +10,11 @@ RUN dotnet restore src/TaxBilling.Api/TaxBilling.Api.csproj
 COPY src/TaxBilling.Api/ src/TaxBilling.Api/
 RUN dotnet publish src/TaxBilling.Api/TaxBilling.Api.csproj -c Release -o /app/publish --no-restore
 
+# Keep only the Datadog tracer files this image uses (linux-arm64 native + net6.0 managed)
+RUN cd /app/publish/datadog && \
+    rm -rf linux-x64 linux-musl-arm64 linux-musl-x64 osx win-x64 win-x86 \
+    net461 netcoreapp3.1 netstandard2.0 dd-dotnet.cmd
+
 # Build an EF Core migration bundle (a standalone executable that applies migrations)
 RUN dotnet tool install --global dotnet-ef --version 10.0.14
 ENV PATH="$PATH:/root/.dotnet/tools"
